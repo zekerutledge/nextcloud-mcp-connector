@@ -128,6 +128,11 @@ no AppAPI header names the account behind a browser there, the consent decision 
 by the OIDC single sign-on Nextcloud already trusts. Setup, secrets and operation:
 [docs/standalone-oauth.md](docs/standalone-oauth.md).
 
+For a fixed service account, the credential-based HTTP server can instead run as a hardened
+loopback-only systemd service behind Cloudflare Tunnel, Access and a second static bearer.
+The deployment and validation checklist is in
+[docs/systemd-cloudflare.md](docs/systemd-cloudflare.md).
+
 [![MCP Connector in the Nextcloud App Store](docs/screenshots/app-store.png)](https://apps.nextcloud.com/apps/mcp_connector)
 
 ## Clients
