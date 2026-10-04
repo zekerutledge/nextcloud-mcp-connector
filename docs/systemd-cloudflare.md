@@ -150,3 +150,16 @@ agent.
 Never put the app password, MCP bearer, or Cloudflare service-token secret in a repository,
 command-line argument, shell history, support transcript, or log. Rotate each credential
 independently when access changes.
+
+## Zeke Agent production record
+
+On 2026-10-04, connector implementation `839d80a` and documentation revision `a341064` were
+validated and activated for Zeke Agent. Ruff, formatting, Pyright, Vulture, the tool-budget
+check, and all 5,470 tests passed. The service restarted at 15:55:49 UTC, remained bound to
+`127.0.0.1:8765`, returned a healthy `0.4.0` response, and advertised 24 tools including the
+guarded `files_delete` operation.
+
+A controlled root-level text file was created through `files_upload`, read back exactly,
+deleted once through the ETag-bound `files_delete`, and confirmed absent from a subsequent
+root listing. The public endpoint remained protected by Cloudflare Access. Temporary
+passwordless sudo was removed immediately after validation. Talk sending remains disabled.
