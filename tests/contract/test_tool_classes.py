@@ -15,7 +15,7 @@ from mcp.types import Tool
 from mcp_connector.server import mcp
 
 # D-28-14: tables_browse became a reader, which gives 12 / 3 / 7.
-TOTAL = 23
+TOTAL = 24
 
 
 async def _tools() -> dict[str, Tool]:
@@ -30,7 +30,7 @@ async def test_every_registered_tool_has_exactly_one_class_and_a_reason() -> Non
     findings = tool_classes.freeze_findings(names)
     assert findings == [], "\n".join(findings)
     assert len(names) == TOTAL, (
-        f"{len(names)} tools; the split 13/3/7 is D-28-14 plus files_read_as_markdown"
+        f"{len(names)} tools; expected split is 13 readers, 4 file writers, 7 unaffected"
     )
 
 
@@ -110,4 +110,4 @@ def test_the_three_classes_add_up_to_the_frozen_surface() -> None:
         len(tool_classes.FILE_READERS),
         len(tool_classes.FILE_WRITERS),
         len(tool_classes.UNAFFECTED),
-    ) == (13, 3, 7)
+    ) == (13, 4, 7)

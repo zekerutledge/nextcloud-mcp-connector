@@ -1,4 +1,4 @@
-"""File tools: finding, browsing, reading and downloading files, and creating new ones.
+"""File tools: finding, browsing, reading, creating, and deleting individual files.
 
 Three guards protect the model's context window and the user's data (threat T-01-13):
 the path guard runs before any request, ``files_read`` refuses binary content instead of
@@ -13,8 +13,9 @@ The two list tools add another guard: every answer that had to stop early says s
 ``truncated`` and hands out a cursor handle, so a folder with ten thousand entries costs
 one page, not one context window (threat T-01-34).
 
-``upload`` is the only write in this package, and it can only create. Everything that
-could turn it into a replace is refused before the request or by Nextcloud itself.
+``upload`` can only create. ``delete`` removes one non-folder path and binds the request to
+the ETag returned by the immediately preceding visible stat. It never retries and never accepts
+a folder, so there is no recursive deletion surface.
 """
 
 import asyncio
@@ -811,6 +812,30 @@ async def upload_binary(
     }
 
 
+async def delete(clients: NcClients, path: str) -> dict:
+    """Delete one visible file revision; folders and retries are deliberately unavailable.
+
+    The same exclusion guard used for reads runs before any destructive request. The ETag from
+    that guarded stat is sent as ``If-Match``, so a different file placed at the same path after
+    inspection is not deleted. Nextcloud normally trashes DAV deletions but can fall back to
+    permanent deletion, which is stated in every successful result.
+    """
+    target = dav.safe_path(path)
+    if target == config.files_root():
+        raise ToolError(
+            message="The files root cannot be deleted.",
+            hint="Give the exact path of one file; folder deletion is unavailable.",
+        )
+    info = await _visible_stat(clients, target)
+    if info["is_collection"]:
+        raise ToolError(
+            message=f"{target} is a folder and was not deleted.",
+            hint="Only individual files can be deleted; recursive folder deletion is unavailable.",
+        )
+    etag = str(info.get("etag") or "")
+    return await dav.delete_file(clients.client, clients.creds, target, etag)
+
+
 async def _writable(clients: NcClients, target: str) -> None:
     """Refuse a write into what is tagged ``kein-ki`` like a write into a missing folder.
 
@@ -863,6 +888,7 @@ async def _visible_stat(
             "content_type": str(known.get("content_type") or ""),
             "size": int(known.get("size") or 0),
             "fileid": fileid,
+            "etag": str(known.get("etag") or ""),
         }
 
     scope, info = await asyncio.gather(

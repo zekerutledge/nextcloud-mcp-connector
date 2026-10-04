@@ -1,10 +1,11 @@
-"""WebDAV client: SEARCH, PROPFIND, ranged GET, and create-only file uploads.
+"""WebDAV client: SEARCH, PROPFIND, ranged GET, create-only uploads, and file deletion.
 
 The ordinary file write is a PUT that carries ``If-None-Match: *``. Large binary uploads use
 Nextcloud's private chunk directory and one final MOVE with ``Overwrite: F``; that MOVE only
-assembles a new file and can never replace an existing target. No tool exposes delete, copy,
-rename, property editing, or an overwrite mode. The precondition is evaluated by Nextcloud in
-the same request, which is why this client does no PROPFIND probe before a create-only PUT.
+assembles a new file and can never replace an existing target. File deletion carries the ETag
+observed immediately before approval/execution as ``If-Match`` and never retries. No tool exposes
+copy, rename, property editing, overwrite, or recursive folder deletion. Preconditions are
+evaluated by Nextcloud in the mutation request, closing path replacement races.
 
 Status handling follows two rules from the research: never repeat a failed
 authentication (Nextcloud counts failures per source IP and slows down every user of the
@@ -768,6 +769,74 @@ def _entry(path: str, props: dict[str, str]) -> dict[str, Any]:
         "fileid": props.get(f"{{{xml.OC}}}fileid", ""),
         "permissions": props.get(f"{{{xml.OC}}}permissions", ""),
     }
+
+
+async def delete_file(
+    client: httpx.AsyncClient,
+    creds: Credentials,
+    path: str,
+    etag: str,
+) -> dict:
+    """Delete exactly the file revision identified by ``etag`` and never retry.
+
+    Nextcloud normally moves WebDAV deletions to its trash bin, but its server implementation
+    can fall back to permanent deletion when trash handling fails or is unavailable. The result
+    states that explicitly; callers must obtain human approval with the same warning.
+    """
+    target = safe_path(path)
+    if not etag:
+        raise ToolError(
+            message=f"Nextcloud returned no ETag for {target}, so it was not deleted.",
+            hint="Refresh the file metadata and try again; deletion requires a revision guard.",
+        )
+    response = await client.request(
+        "DELETE",
+        files_url(creds, target),
+        headers={"If-Match": etag},
+        auth=creds.auth(),
+    )
+    status = response.status_code
+    if status == 204:
+        return {
+            "path": target,
+            "deleted": True,
+            "trash_guaranteed": False,
+            "note": (
+                "Nextcloud accepted the deletion. It normally uses trash, but may permanently "
+                "delete when trash handling fails or is unavailable."
+            ),
+        }
+    if status == 412:
+        raise ConflictError(
+            message=f"{target} changed after it was selected and was not deleted.",
+            hint="Read or list it again, then request a new approval for the current revision.",
+        )
+    if status == 403:
+        raise ToolError(
+            message=f"No permission to delete {target}.",
+            hint="Check the file or share permissions in Nextcloud.",
+            reason=REASON_PERMISSION_DENIED,
+        )
+    if status == 404:
+        raise not_found(target)
+    if status == 423:
+        raise ToolError(
+            message=f"{target} is locked in Nextcloud and was not deleted.",
+            hint="Wait until the lock is released, then request approval again.",
+        )
+    if status == 507:
+        raise ToolError(
+            message=f"Nextcloud could not delete {target} because storage is full.",
+            hint="Free storage and verify the file still exists before requesting approval again.",
+        )
+    _check(response, target)
+    raise ToolError(
+        message=f"Nextcloud answered deletion of {target} with unexpected status {status}.",
+        hint=(
+            "Verify the file in Nextcloud before trying again; deletion is never retried "
+            "automatically."
+        ),
+    )
 
 
 async def put_new_file(

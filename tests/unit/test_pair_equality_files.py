@@ -63,6 +63,7 @@ COVERED = {
     ("files_search", "folder"),
     ("files_upload", "text"),
     ("files_upload", "binary_chunk1"),
+    ("files_delete", "path"),
     ("fetch", "file"),
 }
 #: The cases of the family that are named exceptions (D-28-16), each with its own test.
@@ -515,6 +516,30 @@ async def test_files_search_answers_a_failing_search_alike(
     assert tagged == unknown, f"tagged:  {tagged}\nunknown: {unknown}"
     assert NOT_FOUND not in tagged, "the error of the SEARCH answers, not a missing root"
     assert '"isError": true' in tagged
+
+
+# --- files_delete ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode", GUARD_MODES)
+async def test_files_delete_tagged_target_answers_like_a_missing_file(
+    mode: str, unexpected: list[str]
+) -> None:
+    for path, fileid in TAGGED_READ_TARGETS:
+        tagged, unknown = await pair(
+            "files_delete",
+            {"path": path},
+            {"path": UNKNOWN_PATH},
+            path,
+            UNKNOWN_PATH,
+            _existing_file(path, fileid),
+            _missing(UNKNOWN_PATH),
+            mode,
+            unexpected,
+        )
+        _assert_equal(tagged, unknown, mode, NOT_FOUND)
+        assert '"isError": true' in tagged
 
 
 # --- files_upload: text and the first binary chunk ------------------------------------------

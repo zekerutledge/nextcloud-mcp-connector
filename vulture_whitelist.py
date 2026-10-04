@@ -19,6 +19,7 @@
 files_search
 files_list
 files_read
+files_delete
 files_upload
 files_download
 files_read_as_markdown

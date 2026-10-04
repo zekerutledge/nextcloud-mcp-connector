@@ -1,9 +1,7 @@
-"""The security promise of the README, enforced by a gate instead of by discipline.
+"""The constrained-mutation promise, enforced by a gate instead of by discipline.
 
-README, tool annotations and app store listing all say the same sentence: this server can
-never delete, overwrite or re-share anything (TOOL-09). Without a gate that sentence is a
-claim about today's code and says nothing about the next commit, which is exactly the
-threat this file answers (T-01-94).
+The server has one approved destructive request: revision-bound deletion of an individual file.
+Every other delete, overwrite, move, copy, property change, or share mutation remains forbidden.
 
 Two things make this test trustworthy rather than decorative:
 
@@ -84,7 +82,7 @@ SRC = Path(__file__).resolve().parents[2] / "src" / "mcp_connector"
 # for Talk: PUT and POST are allowed verbs in this project, so a needle can never say which
 # path forms are meant to exist. That list says it out loud, with the four the client builds.
 FORBIDDEN: dict[str, str] = {
-    "DELETE": "no tool may delete anything",
+    "DELETE": "only the one reviewed revision-bound file deletion may use DELETE",
     "MOVE": "no tool may move or rename anything",
     "COPY": "no tool may duplicate anything server side",
     "PROPPATCH": "no tool may change properties of an existing object",
@@ -336,6 +334,14 @@ APP_PASSWORD_DELETE_FORM = '"DELETE",'
 # ``.delete(`` is never exempt anywhere.
 FILES_WITH_OWN_CONFIG = frozenset({"oauth/crypto.py"})
 
+# One reviewed destructive path: ``dav.delete_file`` sends DELETE to the user's file URL with
+# an If-Match ETag. The exemption is one formatter-shaped verb line in this one module; a
+# separate assertion below freezes its count and the required revision header/result warning.
+FILES_WITH_APPROVED_FILE_DELETE = frozenset({"nextcloud/clients/dav.py"})
+APPROVED_FILE_DELETE_FORM = '"DELETE",'
+APPROVED_DELETE_CALLER = "server/reg_files.py"
+APPROVED_DELETE_CALL_FORM = "return compact(await files_tools.delete(clients, path=path))"
+
 #: The same shape as :data:`APP_PASSWORD_DELETE_FORM` and written out a second time rather
 #: than shared: the two exemptions are independent, and one of them widening must not widen
 #: the other.
@@ -418,14 +424,18 @@ def _violations(relative: str, lines: Iterable[tuple[int, str]]) -> list[str]:
                 continue
             if needle == "DELETE" and _is_own_config_value(relative, text):
                 continue
+            if needle == "DELETE" and _is_approved_file_delete(relative, text):
+                continue
+            if needle == ".delete(" and _is_approved_delete_caller(relative, text):
+                continue
             if needle in TABLES_READ_NEEDLES and _is_a_tables_read(relative, text):
                 continue
             findings.append(f"{relative}:{number}: {needle!r} ({why}): {text.strip()}")
     return findings
 
 
-def test_the_production_code_contains_no_destructive_request() -> None:
-    """TOOL-09: the promise holds in the code, not only in the README."""
+def test_the_production_code_contains_only_the_approved_destructive_request() -> None:
+    """The constrained mutation promise holds in code, not only documentation."""
     findings: list[str] = []
     for path in _source_files():
         relative = path.relative_to(SRC).as_posix()
@@ -447,6 +457,34 @@ def _is_own_app_password(relative: str, text: str) -> bool:
 def _is_own_config_value(relative: str, text: str) -> bool:
     """True for the one call that removes this app's own value from the ExApp config."""
     return relative in FILES_WITH_OWN_CONFIG and text.strip() == CONFIG_DELETE_FORM
+
+
+def _is_approved_file_delete(relative: str, text: str) -> bool:
+    """True only for the formatter-shaped verb line in the reviewed DAV module."""
+    return relative in FILES_WITH_APPROVED_FILE_DELETE and text.strip() == APPROVED_FILE_DELETE_FORM
+
+
+def _is_approved_delete_caller(relative: str, text: str) -> bool:
+    """True only for the exact registered tool-to-logic call."""
+    return relative == APPROVED_DELETE_CALLER and text.strip() == APPROVED_DELETE_CALL_FORM
+
+
+def test_the_approved_file_delete_is_unique_revision_bound_and_honest() -> None:
+    path = SRC / "nextcloud" / "clients" / "dav.py"
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    functions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "delete_file"
+    ]
+    assert len(functions) == 1
+    segment = ast.get_source_segment(source, functions[0]) or ""
+    assert segment.count('"DELETE"') == 1
+    assert 'headers={"If-Match": etag}' in segment
+    assert "trash_guaranteed" in segment
+    assert "permanently" in segment
+    assert source.count('\n        "DELETE",\n') == 1
 
 
 def _is_a_tables_read(relative: str, text: str) -> bool:

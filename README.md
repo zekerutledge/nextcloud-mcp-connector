@@ -15,7 +15,7 @@ You bring the model, and no content leaves your server.
 
 ## What it does
 
-- 23 tools across nine app families: files, calendar, notes, Deck, contacts, Tables, Talk,
+- 24 tools across nine app families: files, calendar, notes, Deck, contacts, Tables, Talk,
   Mail and cloud wide search
 - OAuth 2.1 to the MCP authorization specification: dynamic client registration, PKCE S256,
   audience bound tokens, refresh rotation with reuse detection and immediate revocation.
@@ -32,9 +32,10 @@ You bring the model, and no content leaves your server.
 
 ## What this server cannot do
 
-- No deleting: no tool issues a DELETE against files, events, notes, cards or contacts
-- No overwriting: writes are create-only, and `files_upload` refuses an existing path with a
-  clear error instead of replacing it
+- File deletion is limited to one exact non-folder path, guarded by the file's ETag and never
+  retried. Nextcloud normally uses trash, but can permanently delete if trash handling fails
+- No deletion of folders, events, notes, cards, contacts, mail, or any other object
+- No overwriting: `files_upload` refuses an existing path instead of replacing it
 - No user-visible moving or renaming, no share changes and no permission changes; binary
   uploads use Nextcloud's private chunk assembly and still refuse an existing destination
 - Mail is strictly read only: no sending, no draft, no move, no flag, no delete, and no
@@ -48,8 +49,8 @@ modules and fails on the first destructive call,
 
 ## Tools
 
-**read** means the tool only reads, **create-only** means it can create new objects but never
-modifies or removes existing ones. The table is not maintained by hand: a contract test reads
+**read** means the tool only reads, **create-only** means it can only add an object, and
+**destructive** means the tool removes an existing object. The table is not maintained by hand: a contract test reads
 the live registry and fails if a name or a level disagrees with it.
 
 | Tool | Permission | What it does |
@@ -60,6 +61,7 @@ the live registry and fails if a name or a level disagrees with it.
 | `files_download` | read | Any-size file as bounded embedded-resource chunks |
 | `files_read_as_markdown` | read | A DOCX, XLSX, PPTX or PDF file converted to Markdown, in slices |
 | `files_upload` | create-only | A new text file or any-size binary upload in base64 chunks; an existing path is refused, never overwritten |
+| `files_delete` | destructive | One ETag-bound file only; no folders or retry, and trash cannot be guaranteed |
 | `calendar_list_events` | read | Events in an explicit time range, with an explicit time zone |
 | `calendar_create_event` | create-only | A new event; existing events are never changed |
 | `notes_search` | read | Notes by title and content, via the Nextcloud notes search provider |

@@ -44,6 +44,7 @@ EXPECTED_TOOLS = {
     "files_download",
     "files_read_as_markdown",
     "files_upload",
+    "files_delete",
     "calendar_list_events",
     "calendar_create_event",
     "notes_search",
@@ -63,10 +64,7 @@ EXPECTED_TOOLS = {
     "fetch",
 }
 
-# The six write paths. Everything else in EXPECTED_TOOLS only reads (D-16). The set is
-# unchanged by phase 10, and that is a statement rather than an omission: the Mail family adds
-# one tool and not one write path, so the number of ways this server can put something into
-# somebody's Nextcloud stays six while the number of pure reads grows to fifteen.
+# Six create paths and one destructive file-delete path. Everything else only reads.
 CREATE_TOOLS = {
     "files_upload",
     "calendar_create_event",
@@ -75,6 +73,7 @@ CREATE_TOOLS = {
     "tables_create_row",
     "talk_send",
 }
+DESTRUCTIVE_TOOLS = {"files_delete"}
 
 # The documented exception to the schema diet: ChatGPT reads structured content (D-14).
 STRUCTURED_TOOLS = {"search", "fetch"}
@@ -142,11 +141,26 @@ async def test_files_upload_is_annotated_as_create_only() -> None:
 
 
 @pytest.mark.anyio
-async def test_the_six_file_tools_are_complete_and_read_first() -> None:
-    """D-03 and TOOL-14: search, list, read, read_as_markdown, download and upload.
+async def test_files_delete_is_individual_and_destructive() -> None:
+    async with Client(mcp, raise_exceptions=True) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
-    Only upload writes.
-    """
+    tool = tools["files_delete"]
+    annotations = tool.annotations
+    assert annotations is not None
+    assert annotations.read_only_hint is False
+    assert annotations.destructive_hint is True
+    assert annotations.idempotent_hint is False
+    assert annotations.open_world_hint is False
+    assert set(tool.input_schema.get("properties", {})) == {"path"}
+    assert set(tool.input_schema.get("required", [])) == {"path"}
+    assert "folders" in (tool.description or "")
+    assert "permanently" in (tool.description or "")
+
+
+@pytest.mark.anyio
+async def test_the_seven_file_tools_are_complete_and_read_first() -> None:
+    """Five readers, one create-only upload, and one individual destructive delete."""
     async with Client(mcp, raise_exceptions=True) as client:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
@@ -157,7 +171,7 @@ async def test_the_six_file_tools_are_complete_and_read_first() -> None:
         "files_read_as_markdown",
         "files_download",
     )
-    for name in (*readers, "files_upload"):
+    for name in (*readers, "files_upload", "files_delete"):
         assert name in tools, f"{name} is part of the curated file set (D-03)"
         assert tools[name].output_schema is None, "structured_output=False (schema diet)"
 
@@ -541,12 +555,12 @@ async def test_prepare_context_is_listed_as_a_bundling_read() -> None:
 
 @pytest.mark.anyio
 async def test_the_curated_set_is_complete_and_only_the_chatgpt_profile_has_a_schema() -> None:
-    """The whole surface in one assertion: 23 tools, and the diet holds for 21 of them."""
+    """The whole surface in one assertion: 24 tools; only two have output schemas."""
     async with Client(mcp, raise_exceptions=True) as client:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
     assert set(tools) == EXPECTED_TOOLS
-    assert len(tools) == 23, "the curated set is twenty-three tools, no more and no fewer"
+    assert len(tools) == 24, "the curated set is twenty-four tools, no more and no fewer"
 
     with_schema = {name for name, tool in tools.items() if tool.output_schema is not None}
     assert with_schema == STRUCTURED_TOOLS, (
@@ -693,17 +707,13 @@ def _properties(schema: dict[str, Any]) -> list[tuple[str, Any]]:
 
 @pytest.mark.anyio
 async def test_every_tool_carries_honest_annotations() -> None:
-    """D-16 over the whole registry: six create-only tools, fifteen pure reads.
-
-    The write count is the number that did **not** move in phase 10, and the assertion below
-    says so by comparing against the frozen ``CREATE_TOOLS`` rather than against a literal:
-    Mail is a family with one tool, and that tool reads.
-    """
+    """D-16 over the registry: six create-only tools, one destructive tool, and readers."""
     async with Client(mcp, raise_exceptions=True) as client:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
     assert set(tools) == EXPECTED_TOOLS, "the curated set is frozen (D-03 to D-09)"
-    assert CREATE_TOOLS < EXPECTED_TOOLS, "every write tool must be part of the curated set"
+    assert CREATE_TOOLS < EXPECTED_TOOLS, "every create tool must be curated"
+    assert DESTRUCTIVE_TOOLS < EXPECTED_TOOLS, "every destructive tool must be curated"
 
     for name, tool in sorted(tools.items()):
         annotations = tool.annotations
@@ -719,6 +729,10 @@ async def test_every_tool_carries_honest_annotations() -> None:
             assert annotations.idempotent_hint is False, (
                 f"a second {name} call is a second object, not a no-op"
             )
+        elif name in DESTRUCTIVE_TOOLS:
+            assert annotations.read_only_hint is False, f"{name} writes and must say so"
+            assert annotations.destructive_hint is True, f"{name} deletes and must say so"
+            assert annotations.idempotent_hint is False
         else:
             assert annotations.read_only_hint is True, f"{name} only reads"
 
@@ -746,7 +760,7 @@ async def test_no_input_schema_accepts_a_user_parameter() -> None:
     async with Client(mcp, raise_exceptions=True) as client:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
-    assert set(tools) == EXPECTED_TOOLS, "the confused deputy check must cover all 23 schemas"
+    assert set(tools) == EXPECTED_TOOLS, "the confused deputy check must cover all 24 schemas"
 
     findings: list[str] = []
     for name, tool in sorted(tools.items()):
@@ -771,7 +785,7 @@ async def test_the_readme_permission_table_matches_the_live_registry() -> None:
         if not line.startswith("| `"):
             continue
         cells = [cell.strip() for cell in line.strip("|").split("|")]
-        if len(cells) < 2 or cells[1] not in ("read", "create-only"):
+        if len(cells) < 2 or cells[1] not in ("read", "create-only", "destructive"):
             continue
         documented[cells[0].strip("`")] = cells[1]
 
@@ -779,7 +793,13 @@ async def test_the_readme_permission_table_matches_the_live_registry() -> None:
         "the README tool table and the registry must list the same names"
     )
     for name, level in sorted(documented.items()):
-        expected = "create-only" if name in CREATE_TOOLS else "read"
+        expected = (
+            "create-only"
+            if name in CREATE_TOOLS
+            else "destructive"
+            if name in DESTRUCTIVE_TOOLS
+            else "read"
+        )
         assert level == expected, f"README calls {name} {level}, the registry says {expected}"
 
 

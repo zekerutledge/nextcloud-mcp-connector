@@ -15,7 +15,7 @@ from pydantic import Field
 from .. import deps
 from ..errors import ToolError
 from ..tools import files as files_tools
-from . import CREATE_ONLY, READ_ONLY, compact, graceful, mcp
+from . import CREATE_ONLY, DESTRUCTIVE, READ_ONLY, compact, graceful, mcp
 
 
 @mcp.tool(annotations=READ_ONLY, structured_output=False)
@@ -115,6 +115,17 @@ async def files_download(
     ]
 
 
+@mcp.tool(annotations=DESTRUCTIVE, structured_output=False)
+@graceful
+async def files_delete(
+    path: str,
+    ctx: Context | None = None,
+) -> str:
+    """Delete one file; folders refused. Trash failure may delete it permanently."""
+    clients = deps.resolve_clients(ctx)
+    return compact(await files_tools.delete(clients, path=path))
+
+
 @mcp.tool(annotations=CREATE_ONLY, structured_output=False)
 @graceful
 async def files_upload(
@@ -123,30 +134,12 @@ async def files_upload(
         str | None,
         Field(description="UTF-8 text; omit for binary"),
     ] = None,
-    content_base64: Annotated[
-        str | None,
-        Field(description="Base64 chunk for binary upload"),
-    ] = None,
-    total_bytes: Annotated[
-        int | None,
-        Field(ge=0, description="Total binary size in bytes"),
-    ] = None,
-    chunk_index: Annotated[
-        int,
-        Field(ge=1, le=files_tools.MAX_UPLOAD_CHUNKS, description="Chunk number, starting at 1"),
-    ] = 1,
-    upload_id: Annotated[
-        str,
-        Field(description="Continuation id"),
-    ] = "",
-    final: Annotated[
-        bool,
-        Field(description="Assemble after this chunk"),
-    ] = False,
-    content_type: Annotated[
-        str,
-        Field(description="Binary MIME type"),
-    ] = "application/octet-stream",
+    content_base64: str | None = None,
+    total_bytes: Annotated[int | None, Field(ge=0)] = None,
+    chunk_index: Annotated[int, Field(ge=1, le=files_tools.MAX_UPLOAD_CHUNKS)] = 1,
+    upload_id: str = "",
+    final: bool = False,
+    content_type: str = "application/octet-stream",
     ctx: Context | None = None,
 ) -> str:
     """Create text or upload large binary files as base64 chunks; never overwrites."""

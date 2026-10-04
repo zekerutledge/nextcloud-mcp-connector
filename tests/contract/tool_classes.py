@@ -69,7 +69,11 @@ FILE_READERS: dict[str, str] = {
 FILE_WRITERS: dict[str, str] = {
     "files_upload": (
         "Creates a file at a path and checks _writable before every write "
-        "(tools/files.py:484-529, :705-725)."
+        "(tools/files.py:593-638, :814)."
+    ),
+    "files_delete": (
+        "Deletes one visible non-folder path after a guarded stat and sends its ETag as "
+        "If-Match in the destructive request (tools/files.py:814)."
     ),
     "notes_create": (
         "Creates a note file in a category folder and checks folder and candidate file "
@@ -127,6 +131,7 @@ PAIR_CASES: dict[tuple[str, str], str] = {
     ("files_search", "folder"): "files",
     ("files_upload", "text"): "files",
     ("files_upload", "binary_chunk1"): "files",
+    ("files_delete", "path"): "files",
     ("fetch", "file"): "files",
     ("notes_read", "note"): "apps",
     ("fetch", "note"): "apps",
