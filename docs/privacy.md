@@ -178,8 +178,11 @@ protection incident.
   draft, to move, flag or delete a message, and the attachment route of the Mail app
   is never called. The new family adds reach into private data and untrusted
   content, and it deliberately adds no second way out.
-- There are no destructive write paths at all. Nothing is deleted, overwritten,
-  moved or re-shared, and the write tools that exist can only create.
+- The sole destructive write path is `files_delete`. It removes one exact non-folder
+  file, binds the request to the ETag observed immediately beforehand, and is never
+  retried. Nextcloud normally moves DAV deletions to trash, but can permanently delete
+  if trash handling fails. Nothing can delete folders or other object types, overwrite,
+  move or re-share.
 - The assistant never sees more than the signed in user. Every request runs under
   that identity, so Nextcloud's own permissions decide what an injection could
   reach at most.

@@ -18,7 +18,7 @@ Das Modell bringen Sie mit, und kein Inhalt verlässt Ihren Server.
 
 ## Was er kann
 
-- 22 Tools über neun App-Familien: Dateien, Kalender, Notizen, Deck, Kontakte, Tables, Talk,
+- 24 Tools über neun App-Familien: Dateien, Kalender, Notizen, Deck, Kontakte, Tables, Talk,
   Mail und die cloud-weite Suche
 - OAuth 2.1 nach der MCP-Autorisierungsspezifikation: dynamische Client-Registrierung,
   PKCE S256, zielgebundene Token, Refresh-Rotation mit Wiederverwendungserkennung und
@@ -38,8 +38,10 @@ Das Modell bringen Sie mit, und kein Inhalt verlässt Ihren Server.
 
 ## Was dieser Server nicht kann
 
-- Nichts löschen: kein Tool setzt ein DELETE auf Dateien, Termine, Notizen, Karten oder
-  Kontakte ab
+- Dateien werden nur über `files_delete` gelöscht: genau eine Datei, nie ein Ordner, an die
+  beobachtete ETag gebunden und ohne Wiederholung. Nextcloud verwendet normalerweise den
+  Papierkorb, kann aber dauerhaft löschen, wenn die Papierkorbverarbeitung fehlschlägt
+- Kein Löschen von Terminen, Notizen, Karten, Kontakten, Mail oder anderen Objekten
 - Nichts überschreiben: Schreiben legt nur neu an, und `files_upload` lehnt einen vorhandenen
   Pfad mit klarem Fehler ab, statt ihn zu ersetzen; Binärdateien werden in Base64-Blöcken
   beliebiger Gesamtgröße hochgeladen
@@ -50,13 +52,15 @@ Das Modell bringen Sie mit, und kein Inhalt verlässt Ihren Server.
 - Keine Volltextsuche in Dateiinhalten, solange keine Such-App wie Findling installiert ist
 
 Das ist eine Design-Einschränkung und kein Versprechen guten Verhaltens: Ein Contract-Test
-liest die Module und wird beim ersten zerstörenden Aufruf rot,
+liest die Module und wird bei jedem zerstörenden Aufruf außerhalb des ausdrücklich erlaubten
+`files_delete`-Pfads rot,
 [tests/contract/test_no_destructive_calls.py](tests/contract/test_no_destructive_calls.py).
 
 ## Tools
 
 **read** heißt, das Tool liest nur, **create-only** heißt, es kann neue Objekte anlegen, aber
-bestehende nie ändern oder entfernen. Die Tabelle wird nicht von Hand gepflegt: Ein
+bestehende nie ändern oder entfernen, und **destructive** heißt, dass ein bestehendes Objekt
+entfernt wird. Die Tabelle wird nicht von Hand gepflegt: Ein
 Contract-Test liest die laufende Registry und wird rot, sobald ein Name oder eine Stufe
 abweicht.
 
@@ -66,7 +70,9 @@ abweicht.
 | `files_list` | read | Die direkten Kinder eines Ordners, mit Größe und Änderungszeit |
 | `files_read` | read | Der Inhalt einer Datei |
 | `files_download` | read | Eine beliebig große Datei in begrenzten eingebetteten Ressourcenblöcken |
+| `files_read_as_markdown` | read | Eine DOCX-, XLSX-, PPTX- oder PDF-Datei, abschnittsweise in Markdown umgewandelt |
 | `files_upload` | create-only | Eine neue Text- oder Binärdatei in Base64-Blöcken; ein vorhandener Pfad wird abgelehnt, nie überschrieben |
+| `files_delete` | destructive | Genau eine ETag-gebundene Datei; keine Ordner oder Wiederholung, und der Papierkorb ist nicht garantiert |
 | `calendar_list_events` | read | Termine in einem expliziten Zeitraum, mit expliziter Zeitzone |
 | `calendar_create_event` | create-only | Ein neuer Termin; bestehende Termine werden nie geändert |
 | `notes_search` | read | Notizen nach Titel und Inhalt, über den Notes-Suchprovider von Nextcloud |

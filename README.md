@@ -44,7 +44,7 @@ You bring the model, and no content leaves your server.
 - No full text search inside file contents unless a search app such as Findling is installed
 
 That is a design constraint and not a promise of good behaviour: a contract test reads the
-modules and fails on the first destructive call,
+modules and fails on any destructive call outside the explicitly allowlisted `files_delete` path,
 [tests/contract/test_no_destructive_calls.py](tests/contract/test_no_destructive_calls.py).
 
 ## Tools

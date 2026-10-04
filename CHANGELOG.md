@@ -11,6 +11,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `files_delete` removes one exact file after a guarded stat and binds WebDAV `DELETE` to
+  the observed ETag with `If-Match`. It refuses the root and folders, preserves the
+  `kein-ki` exclusion boundary, never retries, and reports that Nextcloud trash handling
+  is not guaranteed and may fall back to permanent deletion.
+
+### Changed
+
+- The registered catalog now contains 24 tools. Tool classification, audit parameters,
+  security contracts, translated READMEs, privacy guidance, and client setup documentation
+  include the narrowly allowlisted destructive file operation.
+
 ## [0.4.0] - 2026-10-01
 
 ### Added

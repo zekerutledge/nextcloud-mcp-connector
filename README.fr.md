@@ -18,7 +18,7 @@ Le modèle, c'est vous qui l'apportez, et aucun contenu ne quitte votre serveur.
 
 ## Ce qu'il sait faire
 
-- 22 outils répartis sur neuf familles d'applications : fichiers, agenda, notes, Deck,
+- 24 outils répartis sur neuf familles d'applications : fichiers, agenda, notes, Deck,
   contacts, Tables, Talk, Mail et la recherche à l'échelle du cloud
 - OAuth 2.1 conforme à la spécification d'autorisation MCP : enregistrement dynamique des
   clients, PKCE S256, jetons liés à leur audience, rotation des jetons de rafraîchissement
@@ -39,8 +39,10 @@ Le modèle, c'est vous qui l'apportez, et aucun contenu ne quitte votre serveur.
 
 ## Ce que ce serveur ne peut pas faire
 
-- Rien supprimer : aucun outil n'émet de DELETE sur des fichiers, événements, notes, cartes
-  ou contacts
+- La suppression de fichiers est limitée à `files_delete` : un seul fichier exact, jamais un
+  dossier, lié à l'ETag observé et sans nouvelle tentative. Nextcloud utilise normalement la
+  corbeille, mais peut supprimer définitivement si sa gestion échoue
+- Aucune suppression d'événement, de note, de carte, de contact, de courriel ni d'autre objet
 - Rien écraser : les écritures sont en création seule, et `files_upload` refuse un chemin
   existant par une erreur claire au lieu de le remplacer ; les fichiers binaires sont envoyés
   en blocs Base64 de taille totale quelconque
@@ -53,13 +55,15 @@ Le modèle, c'est vous qui l'apportez, et aucun contenu ne quitte votre serveur.
   recherche comme Findling n'est pas installée
 
 C'est une contrainte de conception et non une promesse de bon comportement : un test de
-contrat lit les modules et échoue au premier appel destructeur,
+contrat lit les modules et échoue pour tout appel destructeur hors du chemin `files_delete`
+explicitement autorisé,
 [tests/contract/test_no_destructive_calls.py](tests/contract/test_no_destructive_calls.py).
 
 ## Outils
 
 **read** signifie que l'outil ne fait que lire, **create-only** signifie qu'il peut créer de
-nouveaux objets mais ne modifie ni ne supprime jamais ceux qui existent. Le tableau n'est pas
+nouveaux objets mais ne modifie ni ne supprime jamais ceux qui existent, et **destructive**
+signifie qu'il supprime un objet existant. Le tableau n'est pas
 maintenu à la main : un test de contrat lit le registre en cours d'exécution et échoue dès
 qu'un nom ou un niveau diverge.
 
@@ -69,7 +73,9 @@ qu'un nom ou un niveau diverge.
 | `files_list` | read | Les enfants directs d'un dossier, avec taille et date de modification |
 | `files_read` | read | Le contenu d'un fichier |
 | `files_download` | read | Un fichier de toute taille en blocs de ressource intégrés et limités |
+| `files_read_as_markdown` | read | Un fichier DOCX, XLSX, PPTX ou PDF converti en Markdown, par tranches |
 | `files_upload` | create-only | Un fichier texte ou binaire en blocs Base64 ; un chemin existant est refusé, jamais écrasé |
+| `files_delete` | destructive | Un seul fichier lié à son ETag ; aucun dossier ni nouvelle tentative, et la corbeille n'est pas garantie |
 | `calendar_list_events` | read | Les événements d'une plage de temps explicite, avec un fuseau horaire explicite |
 | `calendar_create_event` | create-only | Un nouvel événement ; les événements existants ne sont jamais modifiés |
 | `notes_search` | read | Des notes par titre et contenu, via le fournisseur de recherche de notes Nextcloud |
