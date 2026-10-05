@@ -89,7 +89,13 @@ from mcp_connector.server import mcp
 #   Measurement 2026-09-30, all 23 curated tools registered (files_read_as_markdown of
 #               TOOL-14): 17763 bytes
 #   Budget      unchanged at 18000, because the measurement fits below it
-BUDGET_BYTES = 18_000
+#
+#   Measurement 2026-10-05, all 26 curated tools after adding guarded files_edit and
+#               files_move: 18962 bytes
+#   Budget      20000 bytes. This deliberately keeps only 1038 bytes (5.5 percent) of total
+#               headroom instead of granting the historical 15 percent, while the unchanged
+#               1400-byte per-tool ceiling still catches a single bloated schema.
+BUDGET_BYTES = 20_000
 
 # The second claim, and the one that actually reports a regression. A total with headroom
 # says nothing about a single tool: today's outlier ``calendar_create_event`` sits at 1351

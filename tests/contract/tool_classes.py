@@ -73,7 +73,15 @@ FILE_WRITERS: dict[str, str] = {
     ),
     "files_delete": (
         "Deletes one visible non-folder path after a guarded stat and sends its ETag as "
-        "If-Match in the destructive request (tools/files.py:814)."
+        "If-Match in the destructive request (tools/files.py:920)."
+    ),
+    "files_edit": (
+        "Replaces one visible .md or .txt revision with If-Match and verifies the complete "
+        "read-back (tools/files.py:819-868)."
+    ),
+    "files_move": (
+        "Moves one visible non-folder revision to a guarded collision-free destination and "
+        "verifies source absence plus destination identity (tools/files.py:871-915)."
     ),
     "notes_create": (
         "Creates a note file in a category folder and checks folder and candidate file "
@@ -132,6 +140,8 @@ PAIR_CASES: dict[tuple[str, str], str] = {
     ("files_upload", "text"): "files",
     ("files_upload", "binary_chunk1"): "files",
     ("files_delete", "path"): "files",
+    ("files_edit", "path"): "files",
+    ("files_move", "path"): "files",
     ("fetch", "file"): "files",
     ("notes_read", "note"): "apps",
     ("fetch", "note"): "apps",

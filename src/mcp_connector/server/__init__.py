@@ -38,7 +38,15 @@ from ..errors import (
     ToolError,
 )
 
-__all__ = ["CREATE_ONLY", "DESTRUCTIVE", "READ_ONLY", "compact", "graceful", "mcp"]
+__all__ = [
+    "CREATE_ONLY",
+    "DESTRUCTIVE",
+    "MODIFYING",
+    "READ_ONLY",
+    "compact",
+    "graceful",
+    "mcp",
+]
 
 # (None, None) unless a static bearer is configured. The SDK rejects one without the
 # other with a ValueError in the constructor, so they are built as a pair.
@@ -51,8 +59,9 @@ mcp = MCPServer(
     version=__version__,
     instructions=(
         "Read and create content in the user's own Nextcloud. "
-        "It can delete one revision-bound file, but never overwrite, recursively delete, "
-        "or re-share."
+        "It can revision-safely edit .md and .txt files, move or rename individual files "
+        "without collisions, and delete one revision-bound file. It never recursively "
+        "deletes, overwrites a move destination, or re-shares."
     ),
     token_verifier=_token_verifier,
     auth=_auth_settings,
@@ -64,6 +73,12 @@ CREATE_ONLY = ToolAnnotations(
     read_only_hint=False,
     destructive_hint=False,
     idempotent_hint=False,
+    open_world_hint=False,
+)
+MODIFYING = ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=True,
+    idempotent_hint=True,
     open_world_hint=False,
 )
 DESTRUCTIVE = ToolAnnotations(

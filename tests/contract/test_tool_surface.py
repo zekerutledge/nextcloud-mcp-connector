@@ -45,6 +45,8 @@ EXPECTED_TOOLS = {
     "files_read_as_markdown",
     "files_upload",
     "files_delete",
+    "files_edit",
+    "files_move",
     "calendar_list_events",
     "calendar_create_event",
     "notes_search",
@@ -73,7 +75,8 @@ CREATE_TOOLS = {
     "tables_create_row",
     "talk_send",
 }
-DESTRUCTIVE_TOOLS = {"files_delete"}
+DESTRUCTIVE_TOOLS = {"files_delete", "files_edit", "files_move"}
+IDEMPOTENT_MODIFY_TOOLS = {"files_edit"}
 
 # The documented exception to the schema diet: ChatGPT reads structured content (D-14).
 STRUCTURED_TOOLS = {"search", "fetch"}
@@ -159,8 +162,8 @@ async def test_files_delete_is_individual_and_destructive() -> None:
 
 
 @pytest.mark.anyio
-async def test_the_seven_file_tools_are_complete_and_read_first() -> None:
-    """Five readers, one create-only upload, and one individual destructive delete."""
+async def test_the_nine_file_tools_are_complete_and_read_first() -> None:
+    """Five readers, create, guarded edit/move, and individual delete."""
     async with Client(mcp, raise_exceptions=True) as client:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
@@ -171,7 +174,7 @@ async def test_the_seven_file_tools_are_complete_and_read_first() -> None:
         "files_read_as_markdown",
         "files_download",
     )
-    for name in (*readers, "files_upload", "files_delete"):
+    for name in (*readers, "files_upload", "files_edit", "files_move", "files_delete"):
         assert name in tools, f"{name} is part of the curated file set (D-03)"
         assert tools[name].output_schema is None, "structured_output=False (schema diet)"
 
@@ -555,12 +558,12 @@ async def test_prepare_context_is_listed_as_a_bundling_read() -> None:
 
 @pytest.mark.anyio
 async def test_the_curated_set_is_complete_and_only_the_chatgpt_profile_has_a_schema() -> None:
-    """The whole surface in one assertion: 24 tools; only two have output schemas."""
+    """The whole surface in one assertion: 26 tools; only two have output schemas."""
     async with Client(mcp, raise_exceptions=True) as client:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
     assert set(tools) == EXPECTED_TOOLS
-    assert len(tools) == 24, "the curated set is twenty-four tools, no more and no fewer"
+    assert len(tools) == 26, "the curated set is twenty-six tools, no more and no fewer"
 
     with_schema = {name for name, tool in tools.items() if tool.output_schema is not None}
     assert with_schema == STRUCTURED_TOOLS, (
@@ -731,8 +734,8 @@ async def test_every_tool_carries_honest_annotations() -> None:
             )
         elif name in DESTRUCTIVE_TOOLS:
             assert annotations.read_only_hint is False, f"{name} writes and must say so"
-            assert annotations.destructive_hint is True, f"{name} deletes and must say so"
-            assert annotations.idempotent_hint is False
+            assert annotations.destructive_hint is True, f"{name} changes existing data"
+            assert annotations.idempotent_hint is (name in IDEMPOTENT_MODIFY_TOOLS)
         else:
             assert annotations.read_only_hint is True, f"{name} only reads"
 
@@ -760,7 +763,7 @@ async def test_no_input_schema_accepts_a_user_parameter() -> None:
     async with Client(mcp, raise_exceptions=True) as client:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
-    assert set(tools) == EXPECTED_TOOLS, "the confused deputy check must cover all 24 schemas"
+    assert set(tools) == EXPECTED_TOOLS, "the confused deputy check must cover all 26 schemas"
 
     findings: list[str] = []
     for name, tool in sorted(tools.items()):

@@ -153,6 +153,9 @@ independently when access changes.
 
 ## Zeke Agent production record
 
+The 24-tool count below is a historical deployment measurement. The current curated count is
+frozen in `tests/contract/test_tool_surface.py` and must be revalidated after deployment.
+
 On 2026-10-04, connector implementation `839d80a` and documentation revision `a341064` were
 validated and activated for Zeke Agent. Ruff, formatting, Pyright, Vulture, the tool-budget
 check, and all 5,470 tests passed. The service restarted at 15:55:49 UTC, remained bound to

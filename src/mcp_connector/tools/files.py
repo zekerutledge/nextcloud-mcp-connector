@@ -1,4 +1,4 @@
-"""File tools: finding, browsing, reading, creating, and deleting individual files.
+"""File tools: finding, browsing, reading, creating, editing, moving, and deleting files.
 
 Three guards protect the model's context window and the user's data (threat T-01-13):
 the path guard runs before any request, ``files_read`` refuses binary content instead of
@@ -13,9 +13,11 @@ The two list tools add another guard: every answer that had to stop early says s
 ``truncated`` and hands out a cursor handle, so a folder with ten thousand entries costs
 one page, not one context window (threat T-01-34).
 
-``upload`` can only create. ``delete`` removes one non-folder path and binds the request to
-the ETag returned by the immediately preceding visible stat. It never retries and never accepts
-a folder, so there is no recursive deletion surface.
+``upload`` can only create. ``edit`` replaces one existing ``.md`` or ``.txt`` revision,
+with a 32 KiB UTF-8 ceiling and an exact read-back. ``move`` relocates one file with collision
+refusal. Both mutation paths bind to the source ETag and permit one retry only after inspection
+proves an ambiguous first request did not take effect. ``delete`` remains one-file-only,
+revision-bound, approval-oriented, and non-retrying.
 """
 
 import asyncio
@@ -51,6 +53,10 @@ HARD_DOWNLOAD_BYTES = 8 * 1024 * 1024
 HARD_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 MIN_UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024
 MAX_UPLOAD_CHUNKS = 10_000
+
+#: Agent-writable text stays small enough for complete read/modify/write and exact verification.
+HARD_EDIT_BYTES = 32 * 1024
+EDITABLE_SUFFIXES = frozenset({".md", ".txt"})
 
 DEFAULT_SEARCH_LIMIT = 25
 #: Nextcloud's own default cap for a search without an explicit limit. Going past it would
@@ -810,6 +816,94 @@ async def upload_binary(
         "total_bytes": total_bytes,
         "completed": True,
     }
+
+
+async def edit(clients: NcClients, path: str, content: str) -> dict:
+    """Replace one existing Markdown or text file revision and verify its exact contents.
+
+    The guarded stat supplies the ETag used by the conditional PUT. The DAV layer permits one
+    retry only after a transport failure and only when inspection proves the original revision
+    is still present. Every success includes a complete byte-for-byte read-back.
+    """
+    target = dav.safe_path(path)
+    suffix = "." + target.rsplit(".", 1)[-1].casefold() if "." in target.rsplit("/", 1)[-1] else ""
+    if suffix not in EDITABLE_SUFFIXES:
+        raise ToolError(
+            message=f"{target} is not an editable Markdown or text file.",
+            hint="Only existing .md and .txt files can be edited.",
+        )
+    if target == config.files_root():
+        raise ToolError(
+            message="The files root is a folder, not an editable file.",
+            hint="Give the exact path of an existing .md or .txt file.",
+        )
+    try:
+        data = content.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ToolError(
+            message="The replacement content is not valid UTF-8 text.",
+            hint="Send complete UTF-8 text for the file.",
+        ) from None
+    if len(data) > HARD_EDIT_BYTES:
+        raise ToolError(
+            message=f"The replacement is {len(data)} bytes, above the {HARD_EDIT_BYTES} byte cap.",
+            hint="Reduce the complete file to 32 KiB or less before editing it.",
+        )
+
+    info = await _visible_stat(clients, target)
+    if info["is_collection"]:
+        raise ToolError(
+            message=f"{target} is a folder and cannot be edited.",
+            hint="Only existing .md and .txt files can be edited.",
+        )
+    etag = str(info.get("etag") or "")
+    content_type = "text/markdown" if suffix == ".md" else "text/plain"
+    return await dav.replace_text_file(
+        clients.client,
+        clients.creds,
+        target,
+        data,
+        content_type,
+        etag,
+        max_attempts=2,
+    )
+
+
+async def move(clients: NcClients, source_path: str, destination_path: str) -> dict:
+    """Move or rename one file without replacing any destination.
+
+    The source is guarded and revision-bound; the destination passes the same exclusion guard
+    as creation. Folders and same-path operations are refused. The DAV layer verifies source
+    absence and destination identity before reporting success or making one safe retry.
+    """
+    source = dav.safe_path(source_path)
+    destination = dav.safe_path(destination_path)
+    if source == destination:
+        raise ToolError(
+            message="The source and destination paths are the same.",
+            hint="Choose a different destination path for the move or rename.",
+        )
+    if source == config.files_root() or destination == config.files_root():
+        raise ToolError(
+            message="The files root cannot be moved or used as a file destination.",
+            hint="Give the exact source file and a different destination file path.",
+        )
+    info = await _visible_stat(clients, source)
+    if info["is_collection"]:
+        raise ToolError(
+            message=f"{source} is a folder and was not moved.",
+            hint="Only individual files can be moved or renamed.",
+        )
+    await _writable(clients, destination)
+    return await dav.move_file(
+        clients.client,
+        clients.creds,
+        source,
+        destination,
+        str(info.get("etag") or ""),
+        str(info.get("fileid") or ""),
+        max_attempts=2,
+    )
 
 
 async def delete(clients: NcClients, path: str) -> dict:

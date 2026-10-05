@@ -15,7 +15,7 @@ from pydantic import Field
 from .. import deps
 from ..errors import ToolError
 from ..tools import files as files_tools
-from . import CREATE_ONLY, DESTRUCTIVE, READ_ONLY, compact, graceful, mcp
+from . import CREATE_ONLY, DESTRUCTIVE, MODIFYING, READ_ONLY, compact, graceful, mcp
 
 
 @mcp.tool(annotations=READ_ONLY, structured_output=False)
@@ -113,6 +113,32 @@ async def files_download(
             )
         ),
     ]
+
+
+@mcp.tool(annotations=MODIFYING, structured_output=False)
+@graceful
+async def files_edit(
+    path: Annotated[str, Field(description="Existing .md or .txt file path")],
+    content: Annotated[str, Field(description="Complete replacement UTF-8 text, up to 32 KiB")],
+    ctx: Context | None = None,
+) -> str:
+    """Edit one existing .md or .txt file with ETag protection and exact read-back."""
+    clients = deps.resolve_clients(ctx)
+    return compact(await files_tools.edit(clients, path=path, content=content))
+
+
+@mcp.tool(annotations=DESTRUCTIVE, structured_output=False)
+@graceful
+async def files_move(
+    source_path: Annotated[str, Field(description="Existing source file path")],
+    destination_path: Annotated[str, Field(description="New destination path; must not exist")],
+    ctx: Context | None = None,
+) -> str:
+    """Move or rename one file, refuse folders and destination collisions, then verify."""
+    clients = deps.resolve_clients(ctx)
+    return compact(
+        await files_tools.move(clients, source_path=source_path, destination_path=destination_path)
+    )
 
 
 @mcp.tool(annotations=DESTRUCTIVE, structured_output=False)

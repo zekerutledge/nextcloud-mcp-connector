@@ -1,11 +1,11 @@
-"""WebDAV client: SEARCH, PROPFIND, ranged GET, create-only uploads, and file deletion.
+"""WebDAV client: bounded reads, guarded writes, file moves, and individual deletion.
 
-The ordinary file write is a PUT that carries ``If-None-Match: *``. Large binary uploads use
-Nextcloud's private chunk directory and one final MOVE with ``Overwrite: F``; that MOVE only
-assembles a new file and can never replace an existing target. File deletion carries the ETag
-observed immediately before approval/execution as ``If-Match`` and never retries. No tool exposes
-copy, rename, property editing, overwrite, or recursive folder deletion. Preconditions are
-evaluated by Nextcloud in the mutation request, closing path replacement races.
+Create-only PUTs carry ``If-None-Match: *``. Text edits carry the immediately observed ETag in
+``If-Match`` and require an exact read-back. User-facing MOVE carries the source ETag and
+``Overwrite: F``; it verifies source absence and destination file identity. Edit and move may
+retry once only after an ambiguous transport failure and only when inspection proves the first
+request did not take effect. File deletion remains revision-bound and never retries. No tool
+exposes copy, property editing, destination overwrite, or recursive folder deletion.
 
 Status handling follows two rules from the research: never repeat a failed
 authentication (Nextcloud counts failures per source IP and slows down every user of the
@@ -769,6 +769,277 @@ def _entry(path: str, props: dict[str, str]) -> dict[str, Any]:
         "fileid": props.get(f"{{{xml.OC}}}fileid", ""),
         "permissions": props.get(f"{{{xml.OC}}}permissions", ""),
     }
+
+
+async def _stat_if_present(
+    client: httpx.AsyncClient, creds: Credentials, path: str
+) -> dict[str, Any] | None:
+    """Return current metadata or ``None`` for a definite 404; preserve every other failure."""
+    try:
+        return await stat(client, creds, path)
+    except ToolError as exc:
+        if exc.reason == REASON_UNKNOWN_ID:
+            return None
+        raise
+
+
+async def _text_state(
+    client: httpx.AsyncClient, creds: Credentials, path: str, expected: bytes
+) -> tuple[dict[str, Any] | None, bool]:
+    """Inspect the complete bounded edit target and compare it byte for byte."""
+    info = await _stat_if_present(client, creds, path)
+    if info is None or info["is_collection"] or int(info["size"]) != len(expected):
+        return info, False
+    actual = await get_range(client, creds, path, limit=len(expected) + 1) if expected else b""
+    return info, actual == expected
+
+
+def _edit_result(path: str, info: dict[str, Any], data: bytes, attempts: int) -> dict[str, Any]:
+    return {
+        "path": path,
+        "etag": str(info.get("etag") or ""),
+        "bytes": len(data),
+        "updated": True,
+        "verified": True,
+        "attempts": attempts,
+    }
+
+
+async def replace_text_file(
+    client: httpx.AsyncClient,
+    creds: Credentials,
+    path: str,
+    data: bytes,
+    content_type: str,
+    etag: str,
+    *,
+    max_attempts: int = 2,
+) -> dict[str, Any]:
+    """Replace one exact revision and prove the complete postcondition.
+
+    A transport failure is ambiguous. Before the sole permitted retry, inspect the path: the
+    desired bytes mean the first request succeeded; the unchanged ETag means it did not; every
+    other state is a conflict. HTTP failures are never retried.
+    """
+    target = safe_path(path)
+    if not etag:
+        raise ToolError(
+            message=f"Nextcloud returned no ETag for {target}, so it was not edited.",
+            hint="Read the file again; editing requires a revision guard.",
+        )
+    attempts = 0
+    while attempts < max_attempts:
+        attempts += 1
+        try:
+            response = await client.put(
+                files_url(creds, target),
+                content=data,
+                headers={"If-Match": etag, "Content-Type": content_type},
+                auth=creds.auth(),
+            )
+        except httpx.RequestError as request_error:
+            try:
+                current, matches = await _text_state(client, creds, target, data)
+            except httpx.RequestError:
+                raise request_error from None
+            if matches and current is not None:
+                return _edit_result(target, current, data, attempts)
+            unchanged = current is not None and str(current.get("etag") or "") == etag
+            if unchanged and attempts < max_attempts:
+                continue
+            raise ConflictError(
+                message=f"The state of {target} could not be verified after the edit request.",
+                hint="Read the file before deciding whether to edit it again.",
+            ) from None
+
+        status = response.status_code
+        if status in (200, 204):
+            current, matches = await _text_state(client, creds, target, data)
+            if matches and current is not None:
+                return _edit_result(target, current, data, attempts)
+            raise ConflictError(
+                message=f"{target} did not match the requested content after editing.",
+                hint="Read the file again before making another edit.",
+            )
+        if status == 412:
+            # A retry after a lost successful response sees the old ETag rejected. The exact
+            # read-back distinguishes that case from somebody else's concurrent edit.
+            current, matches = await _text_state(client, creds, target, data)
+            if attempts > 1 and matches and current is not None:
+                return _edit_result(target, current, data, attempts)
+            raise ConflictError(
+                message=f"{target} changed before the edit could be applied.",
+                hint="Read the current file, revise the replacement, and try once more.",
+            )
+        if status == 201:
+            raise ConflictError(
+                message=f"Nextcloud recreated {target} instead of editing the selected revision.",
+                hint="Read the current path before making another edit.",
+            )
+        if status == 403:
+            raise ToolError(
+                message=f"No permission to edit {target}.",
+                hint="Check the file or share permissions in Nextcloud.",
+                reason=REASON_PERMISSION_DENIED,
+            )
+        if status == 404:
+            raise not_found(target)
+        if status == 423:
+            raise ToolError(
+                message=f"{target} is locked in Nextcloud and was not edited.",
+                hint="Wait until the lock is released, then read it before trying again.",
+            )
+        if status == 507:
+            raise ToolError(
+                message=f"Nextcloud could not edit {target} because storage is full.",
+                hint="Free storage and read the file before trying again.",
+            )
+        _check(response, target)
+        raise ToolError(
+            message=f"Nextcloud answered the edit of {target} with unexpected status {status}.",
+            hint="Read the file before deciding whether to try again.",
+        )
+    raise AssertionError("edit attempt loop exhausted")  # pragma: no cover
+
+
+async def _move_state(
+    client: httpx.AsyncClient,
+    creds: Credentials,
+    source: str,
+    destination: str,
+    fileid: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, bool]:
+    source_info, destination_info = await asyncio.gather(
+        _stat_if_present(client, creds, source),
+        _stat_if_present(client, creds, destination),
+    )
+    completed = (
+        source_info is None
+        and destination_info is not None
+        and not destination_info["is_collection"]
+        and bool(fileid)
+        and str(destination_info.get("fileid") or "") == fileid
+    )
+    return source_info, destination_info, completed
+
+
+def _move_result(
+    source: str, destination: str, info: dict[str, Any], attempts: int
+) -> dict[str, Any]:
+    return {
+        "source_path": source,
+        "path": destination,
+        "etag": str(info.get("etag") or ""),
+        "moved": True,
+        "verified": True,
+        "attempts": attempts,
+    }
+
+
+async def move_file(
+    client: httpx.AsyncClient,
+    creds: Credentials,
+    source_path: str,
+    destination_path: str,
+    etag: str,
+    fileid: str,
+    *,
+    max_attempts: int = 2,
+) -> dict[str, Any]:
+    """Move one exact file revision to a free destination and verify its identity."""
+    source = safe_path(source_path)
+    destination = safe_path(destination_path)
+    if not etag or not fileid:
+        raise ToolError(
+            message=f"Nextcloud returned incomplete revision metadata for {source}.",
+            hint="List or read the source again before moving it.",
+        )
+    attempts = 0
+    while attempts < max_attempts:
+        attempts += 1
+        try:
+            response = await client.request(
+                "MOVE",
+                files_url(creds, source),
+                headers={
+                    "Destination": files_url(creds, destination),
+                    "Overwrite": "F",
+                    "If-Match": etag,
+                },
+                auth=creds.auth(),
+            )
+        except httpx.RequestError as request_error:
+            try:
+                source_info, destination_info, completed = await _move_state(
+                    client, creds, source, destination, fileid
+                )
+            except httpx.RequestError:
+                raise request_error from None
+            if completed and destination_info is not None:
+                return _move_result(source, destination, destination_info, attempts)
+            unchanged = (
+                source_info is not None
+                and str(source_info.get("etag") or "") == etag
+                and str(source_info.get("fileid") or "") == fileid
+                and destination_info is None
+            )
+            if unchanged and attempts < max_attempts:
+                continue
+            raise ConflictError(
+                message=f"The move from {source} to {destination} could not be verified.",
+                hint="Inspect both paths before deciding whether to move the file again.",
+            ) from None
+
+        status = response.status_code
+        if status == 201:
+            source_info, destination_info, completed = await _move_state(
+                client, creds, source, destination, fileid
+            )
+            if completed and destination_info is not None:
+                return _move_result(source, destination, destination_info, attempts)
+            raise ConflictError(
+                message=f"The move from {source} to {destination} failed verification.",
+                hint="Inspect both paths before making another move.",
+            )
+        if status == 412:
+            source_info, destination_info, completed = await _move_state(
+                client, creds, source, destination, fileid
+            )
+            if attempts > 1 and completed and destination_info is not None:
+                return _move_result(source, destination, destination_info, attempts)
+            raise ConflictError(
+                message=f"{source} changed or a file already exists at {destination}.",
+                hint="Inspect both paths and choose a free destination before trying again.",
+            )
+        if status in (200, 204):
+            raise ConflictError(
+                message=f"Nextcloud reports that moving {source} replaced {destination}.",
+                hint="This connector requires Overwrite: F; inspect both paths immediately.",
+            )
+        if status == 403:
+            raise ToolError(
+                message=f"No permission to move {source} to {destination}.",
+                hint="Check the source and destination share permissions in Nextcloud.",
+                reason=REASON_PERMISSION_DENIED,
+            )
+        if status in (404, 409):
+            raise parent_missing(destination) if status == 409 else not_found(source)
+        if status == 423:
+            raise ToolError(
+                message=f"{source} or {destination} is locked in Nextcloud.",
+                hint="Wait until the lock is released, then inspect both paths.",
+            )
+        if status == 507:
+            raise ToolError(
+                message=f"Nextcloud could not move {source} because storage is full.",
+                hint="Free storage and inspect both paths before trying again.",
+            )
+        _check(response, source)
+        raise ToolError(
+            message=f"Nextcloud answered the move of {source} with unexpected status {status}.",
+            hint="Inspect both paths before deciding whether to try again.",
+        )
+    raise AssertionError("move attempt loop exhausted")  # pragma: no cover
 
 
 async def delete_file(

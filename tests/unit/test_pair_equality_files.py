@@ -64,6 +64,8 @@ COVERED = {
     ("files_upload", "text"),
     ("files_upload", "binary_chunk1"),
     ("files_delete", "path"),
+    ("files_edit", "path"),
+    ("files_move", "path"),
     ("fetch", "file"),
 }
 #: The cases of the family that are named exceptions (D-28-16), each with its own test.
@@ -531,6 +533,52 @@ async def test_files_delete_tagged_target_answers_like_a_missing_file(
             "files_delete",
             {"path": path},
             {"path": UNKNOWN_PATH},
+            path,
+            UNKNOWN_PATH,
+            _existing_file(path, fileid),
+            _missing(UNKNOWN_PATH),
+            mode,
+            unexpected,
+        )
+        _assert_equal(tagged, unknown, mode, NOT_FOUND)
+        assert '"isError": true' in tagged
+
+
+# --- files_edit / files_move ----------------------------------------------------------------
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode", GUARD_MODES)
+async def test_files_edit_tagged_target_answers_like_a_missing_file(
+    mode: str, unexpected: list[str]
+) -> None:
+    for path, fileid in TAGGED_READ_TARGETS:
+        tagged, unknown = await pair(
+            "files_edit",
+            {"path": path, "content": "replacement\n"},
+            {"path": UNKNOWN_PATH, "content": "replacement\n"},
+            path,
+            UNKNOWN_PATH,
+            _existing_file(path, fileid),
+            _missing(UNKNOWN_PATH),
+            mode,
+            unexpected,
+        )
+        _assert_equal(tagged, unknown, mode, NOT_FOUND)
+        assert '"isError": true' in tagged
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode", GUARD_MODES)
+async def test_files_move_tagged_source_answers_like_a_missing_file(
+    mode: str, unexpected: list[str]
+) -> None:
+    destination = "/Archive/moved.txt"
+    for path, fileid in TAGGED_READ_TARGETS:
+        tagged, unknown = await pair(
+            "files_move",
+            {"source_path": path, "destination_path": destination},
+            {"source_path": UNKNOWN_PATH, "destination_path": destination},
             path,
             UNKNOWN_PATH,
             _existing_file(path, fileid),

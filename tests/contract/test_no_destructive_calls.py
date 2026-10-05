@@ -1,7 +1,8 @@
 """The constrained-mutation promise, enforced by a gate instead of by discipline.
 
-The server has one approved destructive request: revision-bound deletion of an individual file.
-Every other delete, overwrite, move, copy, property change, or share mutation remains forbidden.
+The server has three reviewed existing-file mutations: revision-bound text editing,
+collision-free file move/rename, and revision-bound individual deletion. Every other delete,
+overwrite, move, copy, property change, or share mutation remains forbidden.
 
 Two things make this test trustworthy rather than decorative:
 
@@ -83,7 +84,7 @@ SRC = Path(__file__).resolve().parents[2] / "src" / "mcp_connector"
 # path forms are meant to exist. That list says it out loud, with the four the client builds.
 FORBIDDEN: dict[str, str] = {
     "DELETE": "only the one reviewed revision-bound file deletion may use DELETE",
-    "MOVE": "no tool may move or rename anything",
+    "MOVE": "only reviewed chunk assembly and guarded individual-file move may use MOVE",
     "COPY": "no tool may duplicate anything server side",
     "PROPPATCH": "no tool may change properties of an existing object",
     "ocs/v2.php/apps/files_sharing": "no tool may create or change a share",
@@ -134,10 +135,10 @@ FORBIDDEN: dict[str, str] = {
     "mark via POST",
 }
 
-# The only MOVE in production is Nextcloud's internal chunk-assembly step. It carries
-# ``Overwrite: F`` and is therefore still create-only; user-facing move and rename tools
-# remain forbidden.
-CHUNK_ASSEMBLY_MOVE = "nextcloud/clients/dav.py"
+# Both approved MOVE requests live in the DAV client: create-only chunk assembly and the
+# guarded user-facing individual-file move. AST assertions below freeze their functions,
+# headers, and total count; the line exemption here remains formatter-shaped.
+APPROVED_MOVE_MODULE = "nextcloud/clients/dav.py"
 
 #: The five needles above that name a Tables route, with a line that would carry them into
 #: the code. They stay next to the counter proof rather than next to the dictionary,
@@ -416,7 +417,7 @@ def _violations(relative: str, lines: Iterable[tuple[int, str]]) -> list[str]:
         for needle, why in FORBIDDEN.items():
             if needle not in text:
                 continue
-            if needle == "MOVE" and relative == CHUNK_ASSEMBLY_MOVE and text.strip() == '"MOVE",':
+            if needle == "MOVE" and relative == APPROVED_MOVE_MODULE and text.strip() == '"MOVE",':
                 continue
             if needle == "DELETE" and _is_own_sql(relative, text):
                 continue
@@ -487,6 +488,26 @@ def test_the_approved_file_delete_is_unique_revision_bound_and_honest() -> None:
     assert source.count('\n        "DELETE",\n') == 1
 
 
+def test_the_two_approved_moves_are_collision_free_and_revision_guarded() -> None:
+    path = SRC / APPROVED_MOVE_MODULE
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    functions = {
+        node.name: ast.get_source_segment(source, node) or ""
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name in {"finish_chunked_upload", "move_file"}
+    }
+    assert set(functions) == {"finish_chunked_upload", "move_file"}
+    assert functions["finish_chunked_upload"].count('"MOVE"') == 1
+    assert '"Overwrite": "F"' in functions["finish_chunked_upload"]
+    assert functions["move_file"].count('"MOVE"') == 1
+    assert '"Overwrite": "F"' in functions["move_file"]
+    assert '"If-Match": etag' in functions["move_file"]
+    assert "_move_state" in functions["move_file"]
+    assert sum(text.strip() == '"MOVE",' for _, text in _code_lines(path)) == 2
+
+
 def _is_a_tables_read(relative: str, text: str) -> bool:
     """True for the two Tables reads below a named segment, false for anything else."""
     return relative in FILES_WITH_THE_TABLES_READS and any(
@@ -514,8 +535,8 @@ def test_the_gate_would_notice_a_destructive_call_in_real_code() -> None:
     )
 
     assert _violations(relative, real) == [], (
-        "dav.py must be clean before the injected call can prove anything; its one MOVE is "
-        "the exempt chunk assembly"
+        "dav.py must be clean before the injected call can prove anything; its two reviewed "
+        "MOVE calls are exempt and separately frozen"
     )
     findings = _violations(relative, [*real, (10_000, '    await client.request("DELETE", url)')])
     assert any("'DELETE'" in finding for finding in findings), (

@@ -19,6 +19,8 @@
 files_search
 files_list
 files_read
+files_edit
+files_move
 files_delete
 files_upload
 files_download

@@ -15,7 +15,7 @@ You bring the model, and no content leaves your server.
 
 ## What it does
 
-- 24 tools across nine app families: files, calendar, notes, Deck, contacts, Tables, Talk,
+- 26 tools across nine app families: files, calendar, notes, Deck, contacts, Tables, Talk,
   Mail and cloud wide search
 - OAuth 2.1 to the MCP authorization specification: dynamic client registration, PKCE S256,
   audience bound tokens, refresh rotation with reuse detection and immediate revocation.
@@ -35,22 +35,26 @@ You bring the model, and no content leaves your server.
 - File deletion is limited to one exact non-folder path, guarded by the file's ETag and never
   retried. Nextcloud normally uses trash, but can permanently delete if trash handling fails
 - No deletion of folders, events, notes, cards, contacts, mail, or any other object
-- No overwriting: `files_upload` refuses an existing path instead of replacing it
-- No user-visible moving or renaming, no share changes and no permission changes; binary
-  uploads use Nextcloud's private chunk assembly and still refuse an existing destination
+- `files_upload` remains create-only. `files_edit` replaces only existing `.md` and `.txt`
+  files, binds the write to the observed ETag, caps UTF-8 content at 32 KiB, and verifies an
+  exact read-back
+- `files_move` moves or renames individual files only, binds the source revision, refuses an
+  existing destination, and verifies the resulting path and file identity
+- No folder move, destination overwrite, share change, or permission change; binary uploads
+  use Nextcloud's private chunk assembly and still refuse an existing destination
 - Mail is strictly read only: no sending, no draft, no move, no flag, no delete, and no
   attachment download
 - No admin access: the server acts as one user and inherits exactly that user's permissions
 - No full text search inside file contents unless a search app such as Findling is installed
 
 That is a design constraint and not a promise of good behaviour: a contract test reads the
-modules and fails on any destructive call outside the explicitly allowlisted `files_delete` path,
+modules and fails on destructive calls outside the explicitly reviewed file mutation paths,
 [tests/contract/test_no_destructive_calls.py](tests/contract/test_no_destructive_calls.py).
 
 ## Tools
 
 **read** means the tool only reads, **create-only** means it can only add an object, and
-**destructive** means the tool removes an existing object. The table is not maintained by hand: a contract test reads
+**destructive** means the tool changes or removes an existing object. The table is not maintained by hand: a contract test reads
 the live registry and fails if a name or a level disagrees with it.
 
 | Tool | Permission | What it does |
@@ -61,6 +65,8 @@ the live registry and fails if a name or a level disagrees with it.
 | `files_download` | read | Any-size file as bounded embedded-resource chunks |
 | `files_read_as_markdown` | read | A DOCX, XLSX, PPTX or PDF file converted to Markdown, in slices |
 | `files_upload` | create-only | A new text file or any-size binary upload in base64 chunks; an existing path is refused, never overwritten |
+| `files_edit` | destructive | Replace one ETag-bound `.md` or `.txt` file up to 32 KiB and verify the exact read-back |
+| `files_move` | destructive | Move or rename one ETag-bound file, refuse destination collisions, and verify file identity |
 | `files_delete` | destructive | One ETag-bound file only; no folders or retry, and trash cannot be guaranteed |
 | `calendar_list_events` | read | Events in an explicit time range, with an explicit time zone |
 | `calendar_create_event` | create-only | A new event; existing events are never changed |
